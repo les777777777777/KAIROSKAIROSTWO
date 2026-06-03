@@ -123,7 +123,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
   );
 
   return (
-    <div className={`space-y-10 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12 no-scrollbar ${darkMode ? 'bg-slate-950' : 'bg-slate-50'} ${theme.text}`}>
+    <div className={`space-y-10 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 no-scrollbar ${darkMode ? 'bg-slate-950' : 'bg-slate-50'} ${theme.text}`}>
       <header className="flex justify-between items-end">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -221,7 +221,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
             />
             <motion.div 
               initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className={`relative w-full max-w-sm p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-8 rounded-[3.5rem] border ${theme.border}`}
+              className={`relative w-full max-w-sm p-5 xs:p-8 md:p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-8 rounded-3xl md:rounded-[3.5rem] border ${theme.border} max-h-[90vh] overflow-y-auto no-scrollbar`}
             >
               <div className="text-center space-y-2">
                 <h3 className={`text-3xl font-black ${theme.textTitle}`}>Invitar</h3>
@@ -261,7 +261,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
       {/* MODAL: Search/Add Friend */}
       <AnimatePresence>
         {isSearchOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setIsSearchOpen(false)}
@@ -269,7 +269,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
             />
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-              className={`relative w-full max-w-sm p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-6 rounded-[3.5rem] border ${theme.border}`}
+              className={`relative w-full max-w-sm p-5 xs:p-8 md:p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-6 rounded-3xl md:rounded-[3.5rem] border ${theme.border} max-h-[90vh] overflow-y-auto no-scrollbar`}
             >
               <div className="space-y-1">
                 <h3 className={`text-2xl font-black ${theme.textTitle}`}>Buscar Amigo</h3>
@@ -331,7 +331,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
       {/* MODAL: Interaction Actions */}
       <AnimatePresence>
         {selectedFriend && (
-          <div className="fixed inset-0 z-[110] flex items-end justify-center p-6 pb-20">
+          <div className="fixed inset-0 z-[110] flex items-end justify-center p-4 pb-20">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setSelectedFriend(null)}
@@ -339,7 +339,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({ darkMode }) => {
             />
             <motion.div 
               initial={{ y: 200, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 200, opacity: 0 }}
-              className={`relative w-full max-w-sm p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-10 rounded-[4rem] border ${theme.border}`}
+              className={`relative w-full max-w-sm p-5 xs:p-8 md:p-10 ${theme.modalBg} ${theme.text} shadow-2xl space-y-8 rounded-3xl md:rounded-[4rem] border ${theme.border} max-h-[90vh] overflow-y-auto no-scrollbar`}
             >
               <div className="flex items-center gap-6">
                 <div className="w-20 h-20 rounded-[2rem] sunset-gradient p-1 flex items-center justify-center relative shadow-xl shadow-sunset-orange/10">

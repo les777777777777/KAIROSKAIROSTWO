@@ -7,7 +7,7 @@ interface TimeMascotProps {
   className?: string;
 }
 
-export const TimeMascot: React.FC<TimeMascotProps> = ({ streak, balance, className = 'py-20' }) => {
+export const TimeMascot: React.FC<TimeMascotProps> = ({ streak, balance, className = 'py-4 md:py-10' }) => {
   // Moods based on balance
   const getMood = () => {
     if (balance < 30) return 'sad'; // Blue/Sad

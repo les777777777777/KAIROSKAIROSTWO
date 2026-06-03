@@ -73,7 +73,7 @@ import {
 } from 'firebase/auth';
 import { getDocs, deleteDoc, doc, collection, query, where } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
-import { SocialService, UserProfile } from './services/socialService';
+import { SocialService, UserProfile, subscribeToQuotaStatus, isQuotaExceededSync, isQuotaError, triggerQuotaExceeded } from './services/socialService';
 import { FriendsView } from './components/FriendsView';
 
 // Mock Data
@@ -257,6 +257,11 @@ export default function App() {
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+
+  useEffect(() => {
+    return subscribeToQuotaStatus(setIsQuotaExceeded);
+  }, []);
 
   const [streak, setStreak] = useState(0);
   const [mascotName, setMascotName] = useState('Kairo');
@@ -321,7 +326,7 @@ export default function App() {
           setMascotName(profile.mascotName || 'Kairo');
 
           // Initialize default quick habits if not done yet
-          if (!profile.habitsInitialized) {
+          if (!profile.habitsInitialized && !isQuotaExceededSync()) {
             try {
               const habitsQuery = query(collection(db, 'habits'), where('userId', '==', user.uid));
               const habitsSnap = await getDocs(habitsQuery);
@@ -338,7 +343,11 @@ export default function App() {
               }
               await SocialService.syncProfile({ habitsInitialized: true });
             } catch (err) {
-              console.error("Error logging or initializing default habits:", err);
+              if (isQuotaError(err)) {
+                triggerQuotaExceeded();
+              } else {
+                console.error("Error logging or initializing default habits:", err);
+              }
             }
           }
         }
@@ -789,22 +798,26 @@ export default function App() {
       setIsDeletingAccount(true);
       console.log("Iniciando proceso de eliminación de cuenta para el usuario:", user.uid);
       
-      // 1. Borrar todas las colecciones del usuario en Firestore
-      const collections = ['tasks', 'habits', 'alarms', 'events', 'achievements'];
-      console.log("Paso 1: Detectando y eliminando colecciones de Firestore del usuario:", collections);
-      for (const col of collections) {
-        console.log(`Buscando documentos en la colección '${col}'...`);
-        const q = query(collection(db, col), where('userId', '==', user.uid));
-        const snap = await getDocs(q);
-        console.log(`Colección '${col}': Encontrados ${snap.size} documentos para eliminar.`);
-        for (const document of snap.docs) {
-          await deleteDoc(doc(db, col, document.id));
+      if (!isQuotaExceededSync()) {
+        // 1. Borrar todas las colecciones del usuario en Firestore
+        const collections = ['tasks', 'habits', 'alarms', 'events', 'achievements'];
+        console.log("Paso 1: Detectando y eliminando colecciones de Firestore del usuario:", collections);
+        for (const col of collections) {
+          console.log(`Buscando documentos en la colección '${col}'...`);
+          const q = query(collection(db, col), where('userId', '==', user.uid));
+          const snap = await getDocs(q);
+          console.log(`Colección '${col}': Encontrados ${snap.size} documentos para eliminar.`);
+          for (const document of snap.docs) {
+            await deleteDoc(doc(db, col, document.id));
+          }
         }
+        
+        // 2. Borrar documento del usuario
+        console.log("Paso 2: Eliminando documento de usuario de Firestore ('users')");
+        await deleteDoc(doc(db, 'users', user.uid));
+      } else {
+        console.log("Firestore quota is exceeded. Skipping remote Firebase deletions and executing local cleanup only.");
       }
-      
-      // 2. Borrar documento del usuario
-      console.log("Paso 2: Eliminando documento de usuario de Firestore ('users')");
-      await deleteDoc(doc(db, 'users', user.uid));
       
       // 3. Eliminar cuenta de Firebase Auth
       console.log("Paso 3: Eliminando usuario de Firebase Authentication");
@@ -827,6 +840,7 @@ export default function App() {
   };
 
   const toggleWellness = (id: string) => {
+    if (deletedHabitIds.includes(id)) return; // guard: don't re-save a deleted habit
     const item = wellness.find(w => w.id === id);
     if (item) {
       SocialService.saveHabit({ ...item, completed: !item.completed, category: 'wellness' });
@@ -869,7 +883,7 @@ export default function App() {
         return (
           <div className="space-y-6 pb-36 md:pb-12">
             {/* Immersive Header Card */}
-            <section className="px-6 md:px-8 pt-6 md:pt-8">
+            <section className="px-4 sm:px-6 md:px-8 pt-6">
               <header className="mb-8 space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-sunset-orange animate-pulse" />
@@ -881,7 +895,7 @@ export default function App() {
               <motion.div 
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-sunset-pink'} rounded-[3.5rem] p-8 text-white relative overflow-hidden h-[240px]`}
+                className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-sunset-pink'} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 text-white relative overflow-hidden h-auto min-h-[180px] md:h-[240px]`}
               >
                 {/* Abstract shapes behind */}
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -translate-y-12 translate-x-12 blur-3xl" />
@@ -930,13 +944,13 @@ export default function App() {
             </section>
 
             {/* Bento Grid Content */}
-            <section className="px-6 md:px-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <section className="px-4 sm:px-6 md:px-8 grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Main Mascot Card */}
               <motion.div 
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.2 }}
-                className={`${theme.card} rounded-[3.5rem] p-4 ${theme.shadow} border ${theme.border} flex flex-col justify-between h-[420px] relative overflow-hidden`}
+                className={`${theme.card} rounded-3xl md:rounded-[3.5rem] p-4 ${theme.shadow} border ${theme.border} flex flex-col justify-between h-auto min-h-[380px] md:h-[420px] relative overflow-hidden`}
               >
                 <div className="absolute top-0 right-0 p-8 opacity-5">
                    <div className="w-32 h-32 bg-deep-teal rounded-full" />
@@ -972,9 +986,9 @@ export default function App() {
                     initial={{ opacity: 0, x: 20 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ delay: 0.3 }}
-                    className={`${theme.cardSecondary} rounded-[3.5rem] p-8 ${theme.shadow} border ${theme.border} flex flex-col gap-8`}
+                    className={`${theme.cardSecondary} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 ${theme.shadow} border ${theme.border} flex flex-col gap-8`}
                   >
-                    <div className={`${theme.card} rounded-[2.5rem] p-6 shadow-inner relative`}>
+                    <div className={`${theme.card} rounded-2xl md:rounded-[2.5rem] p-5 xs:p-6 shadow-inner relative`}>
                       <div className="flex justify-between items-center mb-4">
                         <h4 className={`text-sm font-black ${theme.textTitle} tracking-tight`}>Evolución de Energía</h4>
                        <span className="text-[10px] font-black text-sunset-orange uppercase tracking-widest">{balance}% prom.</span>
@@ -999,7 +1013,7 @@ export default function App() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.4 }}
-                  className="bg-deep-teal rounded-[3.5rem] p-8 text-white relative overflow-hidden"
+                  className="bg-deep-teal rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 text-white relative overflow-hidden"
                 >
                    <div className="relative z-10 flex justify-between items-center">
                       <div className="space-y-4 max-w-[70%]">
@@ -1028,7 +1042,7 @@ export default function App() {
         );
       case 'tasks':
         return (
-          <div className="space-y-8 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12 no-scrollbar">
+          <div className="space-y-8 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 no-scrollbar">
             <header className="flex justify-between items-end">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -1053,7 +1067,7 @@ export default function App() {
             <motion.div 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-[#d5e8e1]'} rounded-[3.5rem] p-8 relative overflow-hidden group min-h-[220px] flex flex-col justify-between`}
+              className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-[#d5e8e1]'} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 relative overflow-hidden group min-h-[220px] flex flex-col justify-between`}
             >
                <div className="absolute top-0 right-0 p-6 opacity-20 transition-transform group-hover:scale-110 duration-500">
                   <FileText size={140} className={`rotate-12 ${preferences.darkMode ? 'text-white/10' : 'text-deep-teal'}`} />
@@ -1112,9 +1126,9 @@ export default function App() {
 
             {/* Quick Habits Section */}
             <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className={`${theme.card} rounded-[3.5rem] p-8 shadow-xl ${theme.shadow} border ${theme.border}`}
+               initial={{ opacity: 0, scale: 0.95 }}
+               animate={{ opacity: 1, scale: 1 }}
+               className={`${theme.card} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 shadow-xl ${theme.shadow} border ${theme.border}`}
             >
               <div className="flex justify-between items-center mb-6">
                  <div className="space-y-0.5">
@@ -1123,7 +1137,7 @@ export default function App() {
                  </div>
               </div>
               
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-4 xs:grid-cols-6 sm:grid-cols-8 gap-3 sm:gap-4">
                 {/* Unified Habits (Defaults & Customs) */}
                 {(() => {
                   const getMs = (h: any) => {
@@ -1226,7 +1240,7 @@ export default function App() {
         );
       case 'wellness':
         return (
-          <div className="space-y-8 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12 no-scrollbar">
+          <div className="space-y-8 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 no-scrollbar">
             <header className="space-y-1">
               <div className="flex items-center gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-mint animate-pulse" />
@@ -1235,7 +1249,7 @@ export default function App() {
               <h2 className={`text-4xl font-black ${theme.textTitle} tracking-tight leading-none italic`}>Mi Vida</h2>
             </header>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 xs:grid-cols-2 gap-4">
               {wellness.map((item) => (
                 <motion.div 
                   key={item.id}
@@ -1274,7 +1288,7 @@ export default function App() {
         );
       case 'calendar':
         return (
-          <div className="space-y-8 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12">
+          <div className="space-y-8 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 navigation-safe">
             <header className="flex justify-between items-center">
               <div className="space-y-1">
                 <h2 className="text-4xl font-black text-sunset-wine tracking-tight">Agenda</h2>
@@ -1290,14 +1304,14 @@ export default function App() {
               </motion.button>
             </header>
 
-            <div className="space-y-6">
+            <div className="space-y-4">
               {events.map((event) => (
                 <motion.div 
                   key={event.id}
                   className={`glass-card p-0 overflow-hidden bg-white/60 backdrop-blur-xl border-none shadow-lg flex transition-all ${event.completed ? 'opacity-50 grayscale-[0.5]' : ''}`}
                 >
                   <div className={`w-2 ${event.completed ? 'bg-slate-300' : 'sunset-gradient'}`} />
-                  <div className="p-6 flex-1 flex justify-between items-center">
+                  <div className="p-4 sm:p-6 flex-1 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="space-y-1">
                       <h3 className={`text-xl font-black ${event.completed ? 'text-sunset-wine/40 line-through' : 'text-sunset-wine'}`}>{event.title}</h3>
                       <div className="flex items-center gap-3 text-sunset-wine/60 font-bold text-xs">
@@ -1332,7 +1346,7 @@ export default function App() {
         );
       case 'alarms':
         return (
-          <div className="space-y-8 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12 no-scrollbar">
+          <div className="space-y-8 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 no-scrollbar">
             <header className="flex justify-between items-end">
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -1358,7 +1372,7 @@ export default function App() {
                 <motion.div 
                   key={alarm.id}
                   whileHover={{ scale: 1.02 }}
-                  className={`${theme.card} rounded-[2.5rem] p-6 flex justify-between items-center shadow-xl ${theme.shadow} border ${theme.border}`}
+                  className={`${theme.card} rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 flex justify-between items-center shadow-xl ${theme.shadow} border ${theme.border}`}
                 >
                    <div className="flex items-center gap-5">
                       <div className={`w-14 h-14 rounded-3xl flex items-center justify-center text-white ${
@@ -1394,9 +1408,9 @@ export default function App() {
         );
       case 'stats':
         return (
-          <div className="space-y-8 pb-36 md:pb-12 px-6 md:px-8 pt-8 md:pt-12 no-scrollbar">
+          <div className="space-y-8 pb-36 md:pb-12 px-4 sm:px-6 md:px-8 pt-6 md:pt-12 no-scrollbar">
             {/* Organic User Profile Header */}
-            <div className={`${theme.card} rounded-[4rem] p-10 ${theme.shadow} border ${theme.border} flex flex-col items-center text-center gap-6 relative overflow-hidden`}>
+            <div className={`${theme.card} rounded-3xl md:rounded-[4rem] py-6 px-4 xs:p-8 md:p-10 ${theme.shadow} border ${theme.border} flex flex-col items-center text-center gap-6 relative overflow-hidden`}>
                <div className="absolute top-0 inset-x-0 h-24 sunset-gradient opacity-10" />
                
                <div className="relative">
@@ -1427,18 +1441,18 @@ export default function App() {
                </div>
 
                {/* Key Stats Bar */}
-               <div className="grid grid-cols-2 gap-4 w-full pt-4">
-                  <div className={`${preferences.darkMode ? 'bg-rose-950/20' : 'bg-rose-50/50'} rounded-[2.5rem] p-6 space-y-2 border ${preferences.darkMode ? 'border-rose-900/30' : 'border-rose-100/50'}`}>
-                     <p className="text-[9px] font-black text-rose-300 uppercase tracking-widest leading-none">Racha Vital</p>
+               <div className="grid grid-cols-2 gap-3 sm:gap-4 w-full pt-4">
+                  <div className={`${preferences.darkMode ? 'bg-rose-950/20' : 'bg-rose-50/50'} rounded-2xl md:rounded-[2.5rem] py-4 px-3 sm:p-6 space-y-2 border ${preferences.darkMode ? 'border-rose-900/30' : 'border-rose-100/50'} flex flex-col justify-center`}>
+                     <p className="text-[9px] font-black text-rose-300 uppercase tracking-widest leading-none text-center">Racha Vital</p>
                      <div className="flex items-center justify-center gap-2">
-                        <Zap size={20} className="text-sunset-orange" fill="currentColor" />
+                        <Zap size={20} className="text-sunset-orange flex-shrink-0" fill="currentColor" />
                         <span className={`text-2xl font-black ${theme.textTitle} leading-none`}>{streak}</span>
                      </div>
                   </div>
-                  <div className={`${theme.itemBg} rounded-[2.5rem] p-6 space-y-2 border ${theme.border}`}>
-                     <p className={`text-[9px] font-black ${theme.textMuted} uppercase tracking-widest leading-none`}>Esencia Hoy</p>
+                  <div className={`${theme.itemBg} rounded-2xl md:rounded-[2.5rem] py-4 px-3 sm:p-6 space-y-2 border ${theme.border} flex flex-col justify-center`}>
+                     <p className={`text-[9px] font-black ${theme.textMuted} uppercase tracking-widest leading-none text-center`}>Esencia Hoy</p>
                      <div className="flex items-center justify-center gap-2">
-                        <Clock size={20} className={theme.textTitle} fill="currentColor" />
+                        <Clock size={20} className={`${theme.textTitle} flex-shrink-0`} fill="currentColor" />
                         <span className={`text-2xl font-black ${theme.textTitle} leading-none font-mono`}>{balance}%</span>
                      </div>
                   </div>
@@ -1446,10 +1460,10 @@ export default function App() {
             </div>
 
             {/* Mascot State Card */}
-            <div className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-deep-teal'} rounded-[4rem] p-10 text-white relative overflow-hidden group shadow-xl`}>
+            <div className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-deep-teal'} rounded-3xl md:rounded-[4rem] py-6 px-4 xs:p-8 md:p-10 text-white relative overflow-hidden group shadow-xl`}>
                <div className={`absolute top-[-20%] right-[-10%] w-64 h-64 ${preferences.darkMode ? 'bg-sunset-orange/20' : 'bg-white/10'} rounded-full blur-[100px] group-hover:opacity-60 transition-opacity duration-1000`} />
-               <div className="flex items-center gap-8 relative z-10">
-                  <div className={`w-24 h-24 ${preferences.darkMode ? 'bg-white/10' : 'bg-white/20'} backdrop-blur-xl rounded-[2.5rem] flex items-center justify-center overflow-hidden flex-shrink-0 border border-white/10`}>
+               <div className="flex flex-col sm:flex-row items-center text-center sm:text-left gap-5 sm:gap-8 relative z-10">
+                  <div className={`w-24 h-24 ${preferences.darkMode ? 'bg-white/10' : 'bg-white/20'} backdrop-blur-xl rounded-2xl sm:rounded-[2.5rem] flex items-center justify-center overflow-hidden flex-shrink-0 border border-white/10`}>
                      <div className="scale-75">
                         <TimeMascot streak={streak} balance={balance} />
                      </div>
@@ -1470,13 +1484,13 @@ export default function App() {
             </div>
 
             {/* Stats Visualization Section */}
-            <div className={`${theme.card} rounded-[4rem] p-10 ${theme.shadow} border ${theme.border} space-y-8`}>
-              <header className="flex justify-between items-center">
+            <div className={`${theme.card} rounded-3xl md:rounded-[4rem] py-6 px-4 xs:p-8 md:p-10 ${theme.shadow} border ${theme.border} space-y-8`}>
+              <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                  <div className="space-y-1">
                     <h3 className={`text-2xl font-black ${theme.textTitle} tracking-tighter italic leading-none`}>Progreso</h3>
                     <p className={`text-[9px] font-black ${theme.textMuted} uppercase tracking-widest leading-none`}>Análisis de ritmo</p>
                  </div>
-                 <div className={`${theme.itemBg} p-1.5 rounded-full flex gap-1`}>
+                 <div className={`${theme.itemBg} p-1.5 rounded-full flex gap-1 self-stretch sm:self-auto justify-center`}>
                     {['week', 'month'].map(p => (
                       <button 
                         key={p}
@@ -1526,7 +1540,7 @@ export default function App() {
                     <h4 className={`text-[10px] font-black ${theme.textTitle} uppercase tracking-[0.3em]`}>Logros Coleccionados</h4>
                     <span className={`text-[10px] font-black text-sunset-orange ${preferences.darkMode ? 'bg-rose-950/20' : 'bg-rose-50'} px-3 py-1 rounded-full`}>{ACHIEVEMENTS_LIST.filter(ach => achievements.some(a => a.title === ach.title)).length} / {ACHIEVEMENTS_LIST.length}</span>
                  </div>
-                 <div className="grid grid-cols-4 gap-4">
+                 <div className="grid grid-cols-4 xs:grid-cols-6 sm:grid-cols-8 gap-3">
                     {ACHIEVEMENTS_LIST.map((ach) => {
                        const isUnlocked = achievements.some(a => a.title === ach.title);
                        return (
@@ -1630,9 +1644,9 @@ export default function App() {
                 rotate: [0, 5, -5, 0]
               }}
               transition={{ repeat: Infinity, duration: 3 }}
-              className="w-24 h-24 sunset-gradient rounded-[2.5rem] mx-auto flex items-center justify-center shadow-2xl shadow-sunset-orange/20"
+              className="w-24 h-24 rounded-[2.5rem] mx-auto overflow-hidden shadow-2xl shadow-sunset-orange/20"
             >
-              <Clock size={40} className="text-white" />
+              <img src="/KAIROS_LOGO.png" alt="Kairos" className="w-full h-full object-cover" />
             </motion.div>
             <motion.div 
               animate={{ opacity: [0.3, 0.6, 0.3] }}
@@ -1655,11 +1669,63 @@ export default function App() {
   }
 
   if (!isAuthenticated) {
-    return <AuthScreen darkMode={preferences.darkMode} />;
+    return (
+      <div className="min-h-screen flex flex-col justify-start">
+        {isQuotaExceeded && (
+          <div className="bg-amber-600 text-white px-4 py-3 text-center text-[11px] font-black leading-relaxed shadow-lg z-[200] flex flex-col sm:flex-row items-center justify-center gap-x-4 gap-y-2 border-b border-amber-700/50 animate-fade-in">
+            <span>⚠️ <strong>LÍMITE DE CUOTA DE FIRESTORE EXCEDIDO:</strong> La cuota se reiniciará el día de mañana. Encontrará información de límites detallada en la sección <em>Enterprise edition</em> bajo la columna del plan <em>Spark</em> de <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-200">Precios de Firebase</a>. Tu progreso se guardará en almacenamiento local de respaldo.</span>
+            <div className="flex gap-2">
+              <a
+                href="https://console.firebase.google.com/project/gen-lang-client-0677286701/firestore/databases/ai-studio-2ffff3d8-ae33-4071-a643-d10fe2c2e40e/data?openUpgradeDialog=true"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-100 flex items-center gap-1 font-black whitespace-nowrap bg-white/20 px-2 py-1 rounded shadow-sm text-[10px]"
+              >
+                Ver Mi Base de Datos ↗
+              </a>
+              <a
+                href="https://firebase.google.com/pricing#cloud-firestore"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-amber-100 flex items-center gap-1 font-black whitespace-nowrap bg-white/20 px-2 py-1 rounded shadow-sm text-[10px]"
+              >
+                Precios de Firebase ↗
+              </a>
+            </div>
+          </div>
+        )}
+        <div className="flex-1">
+          <AuthScreen darkMode={preferences.darkMode} />
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className={`min-h-screen relative overflow-x-hidden transition-colors duration-300 ${theme.bg} ${theme.text}`}>
+      {isQuotaExceeded && (
+        <div className="bg-amber-600 text-white px-4 py-3 text-center text-[11px] font-black leading-relaxed shadow-lg z-[200] relative flex flex-col sm:flex-row items-center justify-center gap-x-4 gap-y-2 border-b border-amber-700/50">
+          <span>⚠️ <strong>LÍMITE DE CUOTA DE FIRESTORE EXCEDIDO:</strong> La cuota se reiniciará el día de mañana. Encontrará información de límites detallada en la sección <em>Enterprise edition</em> bajo la columna del plan <em>Spark</em> de <a href="https://firebase.google.com/pricing#cloud-firestore" target="_blank" rel="noopener noreferrer" className="underline hover:text-amber-200">Precios de Firebase</a>. Activamos el modo seguro de almacenamiento local fallback (tus tareas y hábitos se guardarán en tu navegador).</span>
+          <div className="flex gap-2">
+            <a
+              href="https://console.firebase.google.com/project/gen-lang-client-0677286701/firestore/databases/ai-studio-2ffff3d8-ae33-4071-a643-d10fe2c2e40e/data?openUpgradeDialog=true"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-amber-100 flex items-center gap-1 font-black whitespace-nowrap bg-white/20 px-2 py-1 rounded shadow-sm text-[10px]"
+            >
+              Ver Mi Base de Datos ↗
+            </a>
+            <a
+              href="https://firebase.google.com/pricing#cloud-firestore"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-amber-100 flex items-center gap-1 font-black whitespace-nowrap bg-white/20 px-2 py-1 rounded shadow-sm text-[10px]"
+            >
+              Precios de Firebase ↗
+            </a>
+          </div>
+        </div>
+      )}
       {/* Background Decorative Elements */}
       <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-primary/5 rounded-full blur-3xl" />
       <div className="absolute bottom-[-5%] left-[-5%] w-48 h-48 bg-wellness/5 rounded-full blur-3xl" />
@@ -2113,7 +2179,7 @@ export default function App() {
       {/* Profile Modal */}
       <AnimatePresence>
         {isProfileOpen && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -2125,9 +2191,9 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className={`${theme.modalBg} w-full max-w-md rounded-[3rem] overflow-hidden relative z-10 shadow-2xl transition-colors duration-300`}
+              className={`${theme.modalBg} w-full max-w-md rounded-3xl md:rounded-[3rem] overflow-hidden relative z-10 shadow-2xl transition-colors duration-300 max-h-[90vh] overflow-y-auto no-scrollbar`}
             >
-              <div className="bg-sunset-pink p-12 text-white flex flex-col items-center gap-4 text-center">
+              <div className="bg-sunset-pink py-8 px-5 xs:p-12 text-white flex flex-col items-center gap-4 text-center">
                 <div className="relative">
                   <div className={`w-32 h-32 rounded-[2.5rem] ${theme.itemBg} p-1.5 shadow-2xl relative overflow-hidden`}>
                     <img 
@@ -2442,8 +2508,8 @@ export default function App() {
               <div className="absolute top-0 left-0 w-full h-2 sunset-gradient" />
               
               <div className="flex flex-col items-center text-center space-y-6">
-                <div className="w-16 h-16 sunset-gradient rounded-2xl flex items-center justify-center shadow-lg shadow-sunset-orange/20">
-                  <Clock size={32} className="text-white" />
+                <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-lg shadow-sunset-orange/20">
+                  <img src="/KAIROS_LOGO.png" alt="Kairos" className="w-full h-full object-cover" />
                 </div>
                 
                 <div className="space-y-2">
@@ -2996,8 +3062,8 @@ export default function App() {
       <aside className={`hidden md:flex fixed left-0 top-0 h-screen w-64 z-50 flex-col justify-between py-8 px-4 ${preferences.darkMode ? 'bg-slate-900/95 border-r border-white/5' : 'bg-deep-teal/95 border-r border-white/5'} backdrop-blur-2xl shadow-2xl`}>
         <div className="px-4 space-y-8">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sunset-gradient rounded-2xl flex items-center justify-center shadow-lg">
-              <Clock size={20} className="text-white" />
+            <div className="w-10 h-10 rounded-2xl overflow-hidden shadow-lg">
+              <img src="/KAIROS_LOGO.png" alt="Kairos" className="w-full h-full object-cover" />
             </div>
             <span className="text-xl font-black italic tracking-tight text-white">Kairos</span>
           </div>
@@ -3338,17 +3404,9 @@ function AuthScreen({ darkMode }: { darkMode?: boolean }) {
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ type: "spring", damping: 15 }}
-            className="w-24 h-24 sunset-gradient rounded-[2.5rem] mx-auto flex items-center justify-center shadow-2rem shadow-sunset-orange/30 relative overflow-hidden"
+            className="w-24 h-24 rounded-[2.5rem] mx-auto overflow-hidden shadow-2xl shadow-sunset-orange/30"
           >
-            <Clock size={48} className="text-white relative z-10" />
-            <motion.div 
-              animate={{ 
-                scale: [1, 1.5, 1],
-                rotate: [0, 180, 360]
-              }}
-              transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
-              className="absolute inset-0 bg-white/20 blur-xl"
-            />
+            <img src="/KAIROS_LOGO.png" alt="Kairos" className="w-full h-full object-cover" />
           </motion.div>
           <div className="space-y-2">
             <h1 className={`text-5xl font-black tracking-tighter ${theme.textTitle} italic`}>Kairos</h1>
