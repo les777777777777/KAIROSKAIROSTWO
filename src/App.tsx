@@ -261,6 +261,76 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
 
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [isPwaInstalled, setIsPwaInstalled] = useState(false);
+  const [isIOSDevice, setIsIOSDevice] = useState(false);
+  const [isAndroidDevice, setIsAndroidDevice] = useState(false);
+  const [showIosGuide, setShowIosGuide] = useState(false);
+  const [showGenericGuide, setShowGenericGuide] = useState(false);
+  const [isBannerDismissed, setIsBannerDismissed] = useState(() => {
+    if (typeof localStorage !== 'undefined') {
+      return localStorage.getItem('kairos_install_banner_dismissed') === 'true';
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    // Detect if already installed or running as standalone PWA
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone;
+    setIsPwaInstalled(isStandalone);
+
+    const ua = navigator.userAgent;
+    const isIOS = /ipad|iphone|ipod/i.test(ua) && !(window as any).MSStream;
+    const isAndroid = /android/i.test(ua);
+    setIsIOSDevice(isIOS);
+    setIsAndroidDevice(isAndroid);
+
+    if (isStandalone) {
+      setShowInstallBanner(false);
+      return;
+    }
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      if (!isBannerDismissed) {
+        setShowInstallBanner(true);
+      }
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    // iOS check: iOS does not have beforeinstallprompt. If is iOS and not standalone, show banner (if not dismissed)
+    if (isIOS && !isStandalone && !isBannerDismissed) {
+      setShowInstallBanner(true);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, [isBannerDismissed]);
+
+  const handleInstallClick = async () => {
+    if (isIOSDevice) {
+      setShowIosGuide(true);
+    } else if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log(`User choice outcome: ${outcome}`);
+      setDeferredPrompt(null);
+      setShowInstallBanner(false);
+    } else {
+      setShowGenericGuide(true);
+    }
+  };
+
+  const handleDismissBanner = () => {
+    setShowInstallBanner(false);
+    setIsBannerDismissed(true);
+    localStorage.setItem('kairos_install_banner_dismissed', 'true');
+  };
+
   useEffect(() => {
     return subscribeToQuotaStatus(setIsQuotaExceeded);
   }, []);
@@ -565,13 +635,21 @@ export default function App() {
       const now = new Date();
       setCurrentTime(now);
       if (isAuthenticated && user) {
-        NotificationService.checkSchedules({
+        const triggeredIds = NotificationService.checkSchedules({
           alarms,
           routine,
           wellness,
           streak,
           mascotName
         });
+        if (triggeredIds && triggeredIds.length > 0) {
+          triggeredIds.forEach(id => {
+            const trgAlarm = alarms.find(a => a.id === id);
+            if (trgAlarm) {
+              SocialService.saveAlarm({ ...trgAlarm, enabled: false });
+            }
+          });
+        }
       }
     }, 60000);
     return () => clearInterval(timer);
@@ -669,6 +747,30 @@ export default function App() {
     }
   };
 
+  const handleEditAlarm = (alarm: Alarm) => {
+    setEditingAlarm(alarm);
+    setNewAlarm({
+      title: alarm.title,
+      time: alarm.time,
+      category: alarm.category
+    });
+    setAlarmDays([...alarm.days]);
+    setAlarmRepeating(alarm.isRepeating !== false);
+    setIsAlarmModalOpen(true);
+  };
+
+  const handleDeleteAlarm = (alarmId: string) => {
+    SocialService.deleteAlarm(alarmId);
+  };
+
+  const openNewAlarmModal = () => {
+    setEditingAlarm(null);
+    setNewAlarm({ title: '', time: '08:00', category: 'meal' });
+    setAlarmDays(['Todos']);
+    setAlarmRepeating(true);
+    setIsAlarmModalOpen(true);
+  };
+
   const backgroundStyle = useMemo(() => {
     if (preferences.darkMode) {
       return 'from-slate-950 via-slate-900 to-slate-950';
@@ -715,26 +817,7 @@ export default function App() {
   const [isAddQuickHabitOpen, setIsAddQuickHabitOpen] = useState(false);
   const [newQuickHabitName, setNewQuickHabitName] = useState('');
 
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-  }, []);
-
-  const installApp = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    console.log(`PWA Installation chosen: ${outcome}`);
-    setDeferredPrompt(null);
-  };
+  const installApp = handleInstallClick;
 
   const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
 
@@ -856,6 +939,9 @@ export default function App() {
 
   // Form States
   const [newAlarm, setNewAlarm] = useState({ title: '', time: '08:00', category: 'meal' });
+  const [editingAlarm, setEditingAlarm] = useState<Alarm | null>(null);
+  const [alarmDays, setAlarmDays] = useState<string[]>(['Todos']);
+  const [alarmRepeating, setAlarmRepeating] = useState(true);
   const [newCategory, setNewCategory] = useState({ name: '', color: 'indigo' });
   const [newTask, setNewTask] = useState({ title: '', category: 'work' });
   const [newEvent, setNewEvent] = useState({ title: '', startTime: '09:00', endTime: '10:00', location: '', type: 'work' });
@@ -980,7 +1066,7 @@ export default function App() {
           <div className="space-y-6 pb-36 md:pb-12">
             {/* Immersive Header Card */}
             <section className="px-4 sm:px-6 md:px-8 pt-6">
-              <header className="mb-8 space-y-1">
+              <header className="mb-4 space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-sunset-orange animate-pulse" />
                   <p className="text-[10px] font-black text-sunset-orange uppercase tracking-[0.3em] italic">Resumen</p>
@@ -988,10 +1074,44 @@ export default function App() {
                 <h2 className={`text-4xl font-black ${theme.textTitle} tracking-tight leading-none italic`}>Mi Centro</h2>
               </header>
 
+              {showInstallBanner && !isPwaInstalled && (
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className={`p-4 rounded-3xl ${preferences.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-gradient-to-r from-teal-50 to-emerald-50/50 border-teal-100'} border flex flex-col xs:flex-row xs:items-center justify-between gap-4 shadow-lg mb-6`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-deep-teal text-white flex items-center justify-center shrink-0 shadow-inner">
+                      <Smartphone size={18} />
+                    </div>
+                    <div>
+                      <h4 className={`text-xs font-black ${theme.textTitle} uppercase tracking-[0.1em]`}>Instalar Kairos</h4>
+                      <p className={`text-[10px] ${theme.textMuted} font-bold mt-0.5 leading-snug`}>
+                        {isIOSDevice ? 'Añade Kairos a tu pantalla de inicio desde Compartir > Añadir.' : 'Descarga en tu móvil para alarmas funcionales, notificaciones y modo offline.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 self-end xs:self-auto">
+                    <button 
+                      onClick={handleInstallClick}
+                      className="px-4 py-2 bg-deep-teal hover:bg-deep-teal/90 text-white font-black text-[10px] uppercase tracking-widest rounded-xl shadow-md cursor-pointer transition-all"
+                    >
+                      Instalar
+                    </button>
+                    <button 
+                      onClick={handleDismissBanner}
+                      className={`p-2 rounded-xl border ${theme.border} ${theme.textMuted} hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-all`}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
               <motion.div 
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-sunset-pink'} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 text-white relative overflow-hidden h-auto min-h-[180px] md:h-[240px]`}
+                className={`${preferences.darkMode ? 'bg-slate-900' : 'bg-sunset-pink'} rounded-3xl md:rounded-[3.5rem] py-6 px-5 xs:p-8 text-white relative overflow-hidden h-auto min-h-[180px] md:h-[240px]`+``}
               >
                 {/* Abstract shapes behind */}
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -translate-y-12 translate-x-12 blur-3xl" />
@@ -1454,49 +1574,86 @@ export default function App() {
               <motion.button 
                 whileHover={{ scale: 1.1, rotate: 90 }}
                 whileTap={{ scale: 0.9 }}
-                onClick={() => setIsAlarmModalOpen(true)}
+                onClick={openNewAlarmModal}
                 className="w-16 h-16 bg-deep-teal text-white rounded-[2.5rem] flex items-center justify-center shadow-2xl shadow-deep-teal/20"
               >
                 <Plus size={32} />
               </motion.button>
             </header>
 
-
-
             <div className="space-y-4">
-              {alarms.map((alarm) => (
-                <motion.div 
-                  key={alarm.id}
-                  whileHover={{ scale: 1.02 }}
-                  className={`${theme.card} rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 flex justify-between items-center shadow-xl ${theme.shadow} border ${theme.border}`}
-                >
-                   <div className="flex items-center gap-5">
-                      <div className={`w-14 h-14 rounded-3xl flex items-center justify-center text-white ${
+              {alarms.map((alarm) => {
+                const isSingle = alarm.isRepeating === false || alarm.days.includes('Una vez') || alarm.days.length === 0;
+                return (
+                  <motion.div 
+                    key={alarm.id}
+                    whileHover={{ scale: 1.01 }}
+                    className={`${theme.card} rounded-[2rem] p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl ${theme.shadow} border ${theme.border} transition-all`}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white shrink-0 ${
                         alarm.category === 'meal' ? 'bg-orange-400' : 
                         alarm.category === 'medicine' ? 'bg-sky-400' : 'bg-indigo-400'
                       }`}>
-                         <AlarmClock size={24} />
+                        <AlarmClock size={24} />
                       </div>
-                      <div>
-                         <h4 className={`text-2xl font-black ${theme.textTitle} tracking-tight`}>{alarm.time}</h4>
-                         <p className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest leading-none mt-1`}>{alarm.title} • {alarm.days.join(', ')}</p>
+                      <div className="space-y-1">
+                        <div className="flex items-baseline gap-2">
+                          <h4 className={`text-2xl font-black ${theme.textTitle} tracking-tight font-mono`}>{alarm.time}</h4>
+                          <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${
+                            isSingle 
+                              ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' 
+                              : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
+                          }`}>
+                            {isSingle ? 'Una vez' : 'Repetitiva'}
+                          </span>
+                        </div>
+                        <p className={`text-xs font-bold ${theme.textTitle}`}>{alarm.title}</p>
+                        <p className={`text-[9px] font-black ${theme.textMuted} uppercase tracking-widest leading-none mt-1`}>
+                          Días: {alarm.days.join(', ')}
+                        </p>
                       </div>
-                   </div>
-                   <button 
-                     onClick={() => toggleAlarm(alarm.id)}
-                     className={`w-12 h-6 rounded-full p-1 transition-colors relative ${alarm.enabled ? 'bg-mint' : (preferences.darkMode ? 'bg-slate-800' : 'bg-slate-200')}`}
-                   >
-                      <motion.div 
-                        animate={{ x: alarm.enabled ? 24 : 0 }}
-                        className="w-4 h-4 bg-white rounded-full shadow-sm"
-                      />
-                   </button>
-                </motion.div>
-              ))}
+                    </div>
+                    
+                    <div className="flex items-center justify-between sm:justify-end gap-3 pt-3 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-white/5">
+                      <div className="flex items-center gap-1.5">
+                        <motion.button 
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => handleEditAlarm(alarm)}
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${preferences.darkMode ? 'bg-slate-900 text-slate-400 hover:text-white' : 'bg-slate-50 text-slate-500 hover:text-deep-teal'} border ${theme.border}`}
+                          title="Editar"
+                        >
+                          <Edit2 size={14} />
+                        </motion.button>
+                        <motion.button 
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => handleDeleteAlarm(alarm.id)}
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${preferences.darkMode ? 'bg-rose-950/20 text-rose-400 hover:text-rose-300' : 'bg-rose-50 text-rose-500 hover:text-rose-600'} border border-rose-100/10 dark:border-rose-950/40`}
+                          title="Eliminar"
+                        >
+                          <Trash2 size={14} />
+                        </motion.button>
+                      </div>
+                      
+                      <button 
+                        onClick={() => toggleAlarm(alarm.id)}
+                        className={`w-12 h-6 rounded-full p-1 transition-colors relative ${alarm.enabled ? 'bg-mint' : (preferences.darkMode ? 'bg-slate-800' : 'bg-slate-200')}`}
+                      >
+                        <motion.div 
+                          animate={{ x: alarm.enabled ? 24 : 0 }}
+                          className="w-4 h-4 bg-white rounded-full shadow-sm"
+                        />
+                      </button>
+                    </div>
+                  </motion.div>
+                );
+              })}
               
               {alarms.length === 0 && (
-                <div className="bg-slate-50 rounded-[3rem] p-12 text-center border border-dashed border-slate-200">
-                  <p className="text-slate-400 font-black uppercase text-[10px] tracking-widest font-mono">No hay alarmas activas</p>
+                <div className="bg-slate-50 dark:bg-slate-900/40 rounded-[2rem] p-12 text-center border border-dashed border-slate-200 dark:border-white/10">
+                  <p className="text-slate-400 dark:text-slate-500 font-black uppercase text-[10px] tracking-widest font-mono">No hay alarmas activas</p>
                 </div>
               )}
             </div>
@@ -2996,57 +3153,173 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsAlarmModalOpen(false)}
+              onClick={() => {
+                setIsAlarmModalOpen(false);
+                setEditingAlarm(null);
+                setNewAlarm({ title: '', time: '08:00', category: 'meal' });
+                setAlarmDays(['Todos']);
+                setAlarmRepeating(true);
+              }}
               className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className={`relative w-full max-w-sm ${theme.modalBg} ${theme.text} rounded-3xl p-6 shadow-2xl`}
+              className={`relative w-full max-w-sm ${theme.modalBg} ${theme.text} rounded-3xl p-6 shadow-2xl overflow-y-auto max-h-[90vh] no-scrollbar`}
             >
-              <h2 className={`text-2xl font-bold mb-6 ${theme.textTitle}`}>Nueva Alarma</h2>
+              <h2 className={`text-2xl font-bold mb-5 ${theme.textTitle}`}>
+                {editingAlarm ? 'Editar Alarma' : 'Nueva Alarma'}
+              </h2>
               
-              <div className="space-y-5">
-                <div className="space-y-2">
-                  <label className={`text-xs font-bold ${theme.textMuted} uppercase tracking-widest`}>Nombre</label>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest`}>Nombre de la alarma</label>
                   <input 
                     type="text" 
-                    placeholder="Ej: Tomar Vitamina"
+                    placeholder="Ej: Meditación matutina"
                     className={`w-full p-4 ${theme.inputBg} border ${theme.border} rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all ${theme.text}`}
                     value={newAlarm.title}
                     onChange={(e) => setNewAlarm({...newAlarm, title: e.target.value})}
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <label className={`text-xs font-bold ${theme.textMuted} uppercase tracking-widest`}>Hora</label>
+                <div className="space-y-1.5">
+                  <label className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest`}>Hora</label>
                   <input 
                     type="time" 
-                    className={`w-full p-4 ${theme.inputBg} border ${theme.border} rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all ${theme.text}`}
+                    className={`w-full p-4 ${theme.inputBg} border ${theme.border} rounded-2xl focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all ${theme.text} font-mono text-center text-xl`}
                     value={newAlarm.time}
                     onChange={(e) => setNewAlarm({...newAlarm, time: e.target.value})}
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <label className={`text-xs font-bold ${theme.textMuted} uppercase tracking-widest`}>Categoría</label>
-                    <button 
-                      onClick={() => setIsCategoryModalOpen(true)}
-                      className="text-xs font-bold text-primary flex items-center gap-1"
+                {/* Repeating Type Selector */}
+                <div className="space-y-1.5">
+                  <label className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest`}>Frecuencia</label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlarmRepeating(true);
+                        setAlarmDays(['Todos']);
+                      }}
+                      className={`py-2 text-[10px] font-black uppercase rounded-lg transition-all ${
+                        alarmRepeating 
+                          ? 'bg-white dark:bg-slate-800 text-deep-teal shadow-sm font-black' 
+                          : 'text-slate-400 font-bold'
+                      }`}
                     >
-                      <Plus size={12} /> Añadir
+                      Repetitiva
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlarmRepeating(false);
+                        setAlarmDays(['Una vez']);
+                      }}
+                      className={`py-2 text-[10px] font-black uppercase rounded-lg transition-all ${
+                        !alarmRepeating 
+                          ? 'bg-white dark:bg-slate-800 text-deep-teal shadow-sm font-black' 
+                          : 'text-slate-400 font-bold'
+                      }`}
+                    >
+                      Una vez
                     </button>
                   </div>
-                  <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto no-scrollbar p-1">
+                </div>
+
+                {/* Specific days checklist (Only if repeating) */}
+                {alarmRepeating && (
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <label className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest`}>Repetir días</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (alarmDays.length === 7 && !alarmDays.includes('Todos')) {
+                            setAlarmDays(['Todos']);
+                          } else if (alarmDays.includes('Todos')) {
+                            setAlarmDays(['Lun', 'Mar', 'Mie', 'Jue', 'Vie']);
+                          } else {
+                            setAlarmDays(['Todos']);
+                          }
+                        }}
+                        className="text-[9px] font-black text-primary uppercase tracking-wider"
+                      >
+                        {alarmDays.includes('Todos') ? 'Días habiles' : 'Todos'}
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-7 gap-1">
+                      {[
+                        { key: 'Lun', label: 'L' },
+                        { key: 'Mar', label: 'M' },
+                        { key: 'Mie', label: 'M' },
+                        { key: 'Jue', label: 'J' },
+                        { key: 'Vie', label: 'V' },
+                        { key: 'Sab', label: 'S' },
+                        { key: 'Dom', label: 'D' }
+                      ].map((day) => {
+                        const isSelected = alarmDays.includes('Todos') || alarmDays.includes(day.key);
+                        return (
+                          <button
+                            key={day.key}
+                            type="button"
+                            onClick={() => {
+                              if (alarmDays.includes('Todos')) {
+                                // If previously "Todos", remove "Todos" and keep other 6 days
+                                const otherDays = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'].filter(d => d !== day.key);
+                                setAlarmDays(otherDays);
+                              } else {
+                                if (alarmDays.includes(day.key)) {
+                                  const filtered = alarmDays.filter(d => d !== day.key);
+                                  setAlarmDays(filtered.length === 0 ? ['Todos'] : filtered);
+                                } else {
+                                  const filtered = alarmDays.filter(d => d !== 'Todos' && d !== 'Una vez');
+                                  const updated = [...filtered, day.key];
+                                  if (updated.length === 7) {
+                                    setAlarmDays(['Todos']);
+                                  } else {
+                                    setAlarmDays(updated);
+                                  }
+                                }
+                              }
+                            }}
+                            className={`h-8 w-full rounded-lg text-xs font-black transition-all border ${
+                              isSelected 
+                                ? 'bg-deep-teal text-white border-deep-teal shadow-md' 
+                                : `${theme.itemBg} ${theme.textMuted} ${theme.border} hover:bg-slate-100`
+                            }`}
+                            title={day.key}
+                          >
+                            {day.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className={`text-[10px] font-black ${theme.textMuted} uppercase tracking-widest`}>Categoría</label>
+                    <button 
+                      onClick={() => setIsCategoryModalOpen(true)}
+                      className="text-[9px] font-black text-primary flex items-center gap-0.5"
+                    >
+                      <Plus size={10} /> Añadir
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 max-h-32 overflow-y-auto no-scrollbar p-1">
                     {categories.map((cat) => (
                       <button
                         key={cat.id}
+                        type="button"
                         onClick={() => setNewAlarm({...newAlarm, category: cat.id})}
-                        className={`p-2 text-[10px] font-bold uppercase rounded-xl border transition-all ${
+                        className={`py-2 text-[9.5px] font-bold uppercase rounded-xl border transition-all ${
                           newAlarm.category === cat.id 
-                            ? 'bg-primary text-white border-primary' 
+                            ? 'bg-primary text-white border-primary shadow-sm' 
                             : `${theme.itemBg} ${theme.textMuted} ${theme.border}`
                         }`}
                       >
@@ -3056,29 +3329,42 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex gap-3 pt-4">
+                <div className="flex gap-3 pt-3 border-t border-slate-100 dark:border-white/5 mt-5">
                   <button 
-                    onClick={() => setIsAlarmModalOpen(false)}
-                    className="flex-1 p-4 bg-slate-100 text-slate-600 font-bold rounded-2xl"
+                    type="button"
+                    onClick={() => {
+                      setIsAlarmModalOpen(false);
+                      setEditingAlarm(null);
+                      setNewAlarm({ title: '', time: '08:00', category: 'meal' });
+                      setAlarmDays(['Todos']);
+                      setAlarmRepeating(true);
+                    }}
+                    className={`flex-1 p-4 ${theme.itemBg} ${theme.textMuted} font-bold rounded-2xl text-xs uppercase tracking-widest`}
                   >
                     Cancelar
                   </button>
                   <button 
+                    type="button"
                     onClick={() => {
                       if (!newAlarm.title) return;
+                      const alarmId = editingAlarm ? editingAlarm.id : `local_alarm_${Date.now()}`;
                       const alarm: Alarm = {
-                        id: Date.now().toString(),
+                        id: alarmId,
                         title: newAlarm.title,
                         time: newAlarm.time,
                         category: newAlarm.category,
-                        enabled: true,
-                        days: ['Todos']
+                        enabled: editingAlarm ? editingAlarm.enabled : true,
+                        days: alarmRepeating ? (alarmDays.length === 0 ? ['Todos'] : alarmDays) : ['Una vez'],
+                        isRepeating: alarmRepeating
                       };
                       SocialService.saveAlarm(alarm);
                       setIsAlarmModalOpen(false);
                       setNewAlarm({ title: '', time: '08:00', category: 'meal' });
+                      setAlarmDays(['Todos']);
+                      setAlarmRepeating(true);
+                      setEditingAlarm(null);
                     }}
-                    className="flex-1 p-4 bg-primary text-white font-bold rounded-2xl shadow-lg shadow-primary/20"
+                    className="flex-1 p-4 bg-primary text-white font-bold rounded-2xl text-xs uppercase tracking-widest shadow-lg shadow-primary/20"
                   >
                     Guardar
                   </button>
@@ -3408,6 +3694,140 @@ export default function App() {
                   <Send size={15} />
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* iOS Installation Guide Modal */}
+      <AnimatePresence>
+        {showIosGuide && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowIosGuide(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 30 }}
+              className={`relative w-full max-w-sm ${theme.modalBg} ${theme.text} rounded-[2.5rem] p-6 shadow-2xl overflow-y-auto max-h-[85vh] no-scrollbar border ${theme.border}`}
+            >
+              <div className="text-center space-y-3">
+                <div className="w-14 h-14 bg-sunset-pink/20 text-sunset-pink rounded-3xl flex items-center justify-center mx-auto mb-2">
+                  <Smartphone size={28} />
+                </div>
+                <h3 className={`text-xl font-black ${theme.textTitle} tracking-tight`}>Instalar en iOS (iPhone/iPad)</h3>
+                <p className={`text-xs ${theme.textMuted} font-bold leading-relaxed`}>
+                  Safari no permite la instalación automática de apps web, pero puedes añadir Kairos a tu pantalla de inicio en un par de pasos:
+                </p>
+              </div>
+
+              <div className="my-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    1
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Pulsa el icono de <span className="text-deep-teal font-black">"Compartir"</span> (el cuadrado con la flecha hacia arriba) en la barra inferior de Safari.
+                  </p>
+                </div>
+                
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    2
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Desplázate hacia abajo en el menú de opciones y selecciona <span className="text-deep-teal font-black">"Añadir a pantalla de inicio"</span>.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    3
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Confirma pulsando <span className="text-deep-teal font-black">"Añadir"</span> en el extremo superior derecho. ¡Listo!
+                  </p>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowIosGuide(false)}
+                className="w-full p-4 bg-deep-teal hover:bg-deep-teal/90 text-white font-black rounded-2xl text-xs uppercase tracking-widest shadow-lg shadow-deep-teal/20 transition-all cursor-pointer"
+              >
+                Entendido
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Generic Installation Guide Modal */}
+      <AnimatePresence>
+        {showGenericGuide && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowGenericGuide(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 30 }}
+              className={`relative w-full max-w-sm ${theme.modalBg} ${theme.text} rounded-[2.5rem] p-6 shadow-2xl border ${theme.border}`}
+            >
+              <div className="text-center space-y-3">
+                <div className="w-14 h-14 bg-deep-teal/10 text-deep-teal rounded-3xl flex items-center justify-center mx-auto mb-2">
+                  <Smartphone size={28} />
+                </div>
+                <h3 className={`text-xl font-black ${theme.textTitle} tracking-tight`}>Instalar Kairos</h3>
+                <p className={`text-xs ${theme.textMuted} font-bold leading-relaxed`}>
+                  Instala Kairos para recibir alarmas instantáneas, guardar tus hábitos de forma estable y acceder cuando no tengas internet:
+                </p>
+              </div>
+
+              <div className="my-6 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    1
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Pulsa el botón de opciones en la esquina de tu navegador (los tres puntos superiores en Chrome o Firefox).
+                  </p>
+                </div>
+                
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    2
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Selecciona la opción <span className="text-deep-teal font-black">"Instalar aplicación"</span> o <span className="text-deep-teal font-black">"Añadir a pantalla de inicio"</span>.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-deep-teal text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
+                    3
+                  </div>
+                  <p className="text-xs font-bold leading-relaxed">
+                    Confirma y la app se añadirá a tu pantalla principal con su propio icono.
+                  </p>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setShowGenericGuide(false)}
+                className="w-full p-4 bg-deep-teal hover:bg-deep-teal/90 text-white font-black rounded-2xl text-xs uppercase tracking-widest shadow-lg shadow-deep-teal/20 transition-all cursor-pointer"
+              >
+                Cerrar Guía
+              </button>
             </motion.div>
           </div>
         )}

@@ -103,13 +103,14 @@ class NotificationServiceManager {
    * Call this every minute on a background cycle or clock tick.
    */
   public checkSchedules(items: {
-    alarms: Array<{ id: string; title: string; time: string; days: string[]; enabled: boolean; category: string }>;
+    alarms: Array<{ id: string; title: string; time: string; days: string[]; enabled: boolean; category: string; isRepeating?: boolean }>;
     routine: Array<{ id: string; activity: string; time: string; completed: boolean }>;
     wellness: Array<{ id: string; label: string; time: string; completed: boolean }>;
     streak: number;
     mascotName: string;
-  }) {
-    if (!this.hasPermission()) return;
+  }): string[] {
+    const triggeredSingleAlarmIds: string[] = [];
+    if (!this.hasPermission()) return triggeredSingleAlarmIds;
 
     const now = new Date();
     const currentHour = String(now.getHours()).padStart(2, '0');
@@ -130,8 +131,10 @@ class NotificationServiceManager {
     items.alarms.forEach(alarm => {
       if (!alarm.enabled) return;
       if (alarm.time === currentTimeStr) {
-        // Alarms are active either for 'Todos' or if the current day name is in days array
-        const isActiveToday = alarm.days.includes('Todos') || alarm.days.includes(todayDayName);
+        // Alarms are active either for 'Todos', or if current day name is in days array,
+        // or if it is a single-time alarm (no specific repeating days or isRepeating is set to false)
+        const isSingleRun = alarm.isRepeating === false || alarm.days.length === 0 || alarm.days.includes('Una vez');
+        const isActiveToday = isSingleRun || alarm.days.includes('Todos') || alarm.days.includes(todayDayName);
         if (isActiveToday) {
           const catLabel = alarm.category === 'meal' ? 'Alimento 🍏' : alarm.category === 'medicine' ? 'Cuidado 💊' : 'Enfoque ⚡';
           checkAndNotify(
@@ -139,6 +142,9 @@ class NotificationServiceManager {
             `Alarma: ${alarm.title || 'Kairos Alerta'}`,
             `¡Es hora del ritmo de tu día! Categoria: ${catLabel}`
           );
+          if (isSingleRun) {
+            triggeredSingleAlarmIds.push(alarm.id);
+          }
         }
       }
     });
@@ -196,6 +202,7 @@ class NotificationServiceManager {
         );
       }
     }
+    return triggeredSingleAlarmIds;
   }
 
   /**

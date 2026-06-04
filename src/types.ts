@@ -60,4 +60,5 @@ export interface Alarm {
   category: string; // ID of the category
   enabled: boolean;
   days: string[]; // e.g., ['Lun', 'Mar']
+  isRepeating?: boolean;
 }
